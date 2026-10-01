@@ -32,16 +32,31 @@ class MappingCreateSerializer(serializers.Serializer):
     doctor_id = serializers.IntegerField()
 
     def validate(self, attrs):
-        if not Patient.objects.filter(id=attrs["patient_id"]).exists():
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+
+        # Verify the patient exists AND belongs to the current user
+        try:
+            patient = Patient.objects.get(id=attrs["patient_id"])
+        except Patient.DoesNotExist:
             raise serializers.ValidationError({"patient_id": "Patient not found."})
+
+        if patient.created_by != request.user:
+            raise serializers.ValidationError(
+                {"patient_id": "You do not have access to this patient."}
+            )
+
         if not Doctor.objects.filter(id=attrs["doctor_id"]).exists():
             raise serializers.ValidationError({"doctor_id": "Doctor not found."})
+
         if Mapping.objects.filter(
             patient_id=attrs["patient_id"], doctor_id=attrs["doctor_id"]
         ).exists():
             raise serializers.ValidationError(
                 "This doctor is already assigned to this patient."
             )
+
         return attrs
 
     def create(self, validated_data):

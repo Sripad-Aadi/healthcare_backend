@@ -1,11 +1,6 @@
-"""End-to-end test for all Healthcare Backend API endpoints.
-
-Usage:
-    1. Start the server:  python manage.py runserver
-    2. Run:               python scripts/test_api.py
-"""
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -44,135 +39,442 @@ def check(name, condition, detail=""):
         print(f"  FAIL  {name}  {detail}")
 
 
+# Unique suffix so the script can be run multiple times
+SUFFIX = str(int(time.time()))
+EMAIL_A = f"usera_{SUFFIX}@example.com"
+EMAIL_B = f"userb_{SUFFIX}@example.com"
+
 print("== 1. Authentication ==")
+
+# Register user A
 status, body = request(
     "POST",
     "/auth/register/",
     data={
-        "name": "Test User",
-        "email": "test@example.com",
+        "name": "User A",
+        "email": EMAIL_A,
         "password": "secret123",
         "password_confirm": "secret123",
     },
 )
-check("register returns 201", status == 201, f"got {status}: {body}")
+check("register user A returns 201", status == 201, f"got {status}: {body}")
 
-status, _ = request(
+# Duplicate email
+status, body = request(
     "POST",
     "/auth/register/",
     data={
-        "name": "Test User",
-        "email": "test@example.com",
+        "name": "User A Again",
+        "email": EMAIL_A,
         "password": "secret123",
         "password_confirm": "secret123",
     },
 )
-check("duplicate email rejected (400)", status == 400, f"got {status}")
+check("duplicate email rejected (400)", status == 400, f"got {status}: {body}")
 
+# Mismatched passwords
+status, body = request(
+    "POST",
+    "/auth/register/",
+    data={
+        "name": "Bad Passwords",
+        "email": f"badpass_{SUFFIX}@example.com",
+        "password": "secret123",
+        "password_confirm": "different456",
+    },
+)
+check("mismatched passwords rejected (400)", status == 400, f"got {status}: {body}")
+
+# Short password
+status, body = request(
+    "POST",
+    "/auth/register/",
+    data={
+        "name": "Short Pass",
+        "email": f"short_{SUFFIX}@example.com",
+        "password": "short",
+        "password_confirm": "short",
+    },
+)
+check("short password rejected (400)", status == 400, f"got {status}: {body}")
+
+# Register user B (for cross-user tests)
+status, body = request(
+    "POST",
+    "/auth/register/",
+    data={
+        "name": "User B",
+        "email": EMAIL_B,
+        "password": "secret123",
+        "password_confirm": "secret123",
+    },
+)
+check("register user B returns 201", status == 201, f"got {status}: {body}")
+
+# Login user A — valid
+status, body = request(
+    "POST", "/auth/login/", data={"email": EMAIL_A, "password": "secret123"}
+)
+check(
+    "login user A returns 200 with tokens",
+    status == 200 and "access" in body,
+    f"got {status}: {body}",
+)
+token_a = body["access"] if status == 200 else None
+
+# Login user B — valid
+status, body = request(
+    "POST", "/auth/login/", data={"email": EMAIL_B, "password": "secret123"}
+)
+check(
+    "login user B returns 200 with tokens",
+    status == 200 and "access" in body,
+    f"got {status}: {body}",
+)
+token_b = body["access"] if status == 200 else None
+
+# Login — wrong password
+status, body = request(
+    "POST", "/auth/login/", data={"email": EMAIL_A, "password": "wrongpassword"}
+)
+check("login wrong password rejected (401)", status == 401, f"got {status}: {body}")
+
+# Login — nonexistent email
 status, body = request(
     "POST",
     "/auth/login/",
-    data={"email": "test@example.com", "password": "secret123"},
+    data={"email": f"nonexistent_{SUFFIX}@example.com", "password": "secret123"},
 )
-check("login returns 200 with tokens", status == 200 and "access" in body, f"got {status}: {body}")
-token = body["access"] if status == 200 else None
-
-status, _ = request("POST", "/auth/login/", data={"email": "test@example.com", "password": "wrong"})
-check("login with wrong password rejected (401)", status == 401, f"got {status}")
+check("login nonexistent email rejected (401)", status == 401, f"got {status}: {body}")
 
 print("== 2. Patients ==")
-status, _ = request("GET", "/patients/")
-check("patients list requires auth (401)", status == 401, f"got {status}")
 
+# Unauthenticated
+status, body = request("GET", "/patients/")
+check("list patients without auth (401)", status == 401, f"got {status}")
+
+# Create patient for user A
 status, body = request(
     "POST",
     "/patients/",
-    token=token,
-    data={"name": "Jane Smith", "age": 30, "gender": "Female", "phone_number": "1234567890"},
+    token=token_a,
+    data={
+        "name": "Patient A1",
+        "age": 30,
+        "gender": "Female",
+        "phone_number": "1111111111",
+    },
 )
-check("create patient returns 201", status == 201, f"got {status}: {body}")
-patient_id = body["id"] if status == 201 else None
+check("create patient A1 returns 201", status == 201, f"got {status}: {body}")
+patient_a1 = body["id"] if status == 201 else None
 
-status, body = request("POST", "/patients/", token=token, data={"name": "Invalid", "age": -5})
-check("patient validation errors (400)", status == 400, f"got {status}")
+# Create another patient for user A
+status, body = request(
+    "POST",
+    "/patients/",
+    token=token_a,
+    data={
+        "name": "Patient A2",
+        "age": 25,
+        "gender": "Male",
+        "phone_number": "2222222222",
+    },
+)
+check("create patient A2 returns 201", status == 201, f"got {status}: {body}")
+patient_a2 = body["id"] if status == 201 else None
 
-status, body = request("GET", "/patients/", token=token)
-check("list patients returns 200", status == 200 and len(body) >= 1, f"got {status}: {body}")
+# Create patient for user B
+status, body = request(
+    "POST",
+    "/patients/",
+    token=token_b,
+    data={
+        "name": "Patient B1",
+        "age": 40,
+        "gender": "Other",
+        "phone_number": "3333333333",
+    },
+)
+check("create patient B1 returns 201", status == 201, f"got {status}: {body}")
+patient_b1 = body["id"] if status == 201 else None
 
-status, body = request("GET", f"/patients/{patient_id}/", token=token)
-check("get patient returns 200", status == 200 and body["name"] == "Jane Smith", f"got {status}: {body}")
+# Validation — missing required fields
+status, body = request("POST", "/patients/", token=token_a, data={"age": -5})
+check("create patient invalid data rejected (400)", status == 400, f"got {status}: {body}")
 
+# List — user A sees only own patients
+status, body = request("GET", "/patients/", token=token_a)
+patient_ids_a = [p["id"] for p in body] if status == 200 else []
+check(
+    "user A list contains only own patients",
+    status == 200
+    and patient_a1 in patient_ids_a
+    and patient_a2 in patient_ids_a
+    and patient_b1 not in patient_ids_a,
+    f"got {status}: {body}",
+)
+
+# List — user B sees only own patients
+status, body = request("GET", "/patients/", token=token_b)
+patient_ids_b = [p["id"] for p in body] if status == 200 else []
+check(
+    "user B list contains only own patients",
+    status == 200 and patient_b1 in patient_ids_b and len(patient_ids_b) == 1,
+    f"got {status}: {body}",
+)
+
+# Get own patient
+status, body = request("GET", f"/patients/{patient_a1}/", token=token_a)
+check("get own patient returns 200", status == 200, f"got {status}: {body}")
+
+# Get nonexistent patient
+status, body = request("GET", "/patients/99999/", token=token_a)
+check("get nonexistent patient returns 404", status == 404, f"got {status}: {body}")
+
+# Cross-user get — B tries to access A's patient
+status, body = request("GET", f"/patients/{patient_a1}/", token=token_b)
+check("cross-user get patient returns 404", status == 404, f"got {status}: {body}")
+
+# Update own patient
 status, body = request(
     "PUT",
-    f"/patients/{patient_id}/",
-    token=token,
-    data={"name": "Jane Doe", "age": 31, "gender": "Female"},
+    f"/patients/{patient_a1}/",
+    token=token_a,
+    data={"name": "Patient A1 Updated", "age": 31, "gender": "Female"},
 )
-check("update patient returns 200", status == 200 and body["name"] == "Jane Doe", f"got {status}: {body}")
+check(
+    "update own patient returns 200",
+    status == 200 and body["name"] == "Patient A1 Updated",
+    f"got {status}: {body}",
+)
+
+# Update nonexistent patient
+status, body = request(
+    "PUT",
+    "/patients/99999/",
+    token=token_a,
+    data={"name": "Ghost", "age": 1, "gender": "Other"},
+)
+check("update nonexistent patient returns 404", status == 404, f"got {status}: {body}")
+
+# Cross-user update — B tries to update A's patient
+status, body = request(
+    "PUT",
+    f"/patients/{patient_a1}/",
+    token=token_b,
+    data={"name": "Hijacked", "age": 99, "gender": "Male"},
+)
+check("cross-user update patient returns 404", status == 404, f"got {status}: {body}")
 
 print("== 3. Doctors ==")
-status, _ = request("GET", "/doctors/")
-check("doctors list requires auth (401)", status == 401, f"got {status}")
 
+# Unauthenticated
+status, body = request("GET", "/doctors/")
+check("list doctors without auth (401)", status == 401, f"got {status}")
+
+# Create doctor
 status, body = request(
     "POST",
     "/doctors/",
-    token=token,
-    data={"name": "Dr. House", "specialization": "Diagnostics", "email": "house@example.com"},
+    token=token_a,
+    data={
+        "name": "Dr. Smith",
+        "specialization": "Cardiology",
+        "email": f"smith_{SUFFIX}@example.com",
+    },
 )
 check("create doctor returns 201", status == 201, f"got {status}: {body}")
-doctor_id = body["id"] if status == 201 else None
+doctor_1 = body["id"] if status == 201 else None
 
-status, body = request("GET", "/doctors/", token=token)
-check("list doctors returns 200", status == 200 and len(body) >= 1, f"got {status}: {body}")
+# Create another doctor
+status, body = request(
+    "POST",
+    "/doctors/",
+    token=token_a,
+    data={
+        "name": "Dr. Jones",
+        "specialization": "Neurology",
+        "email": f"jones_{SUFFIX}@example.com",
+    },
+)
+check("create doctor 2 returns 201", status == 201, f"got {status}: {body}")
+doctor_2 = body["id"] if status == 201 else None
 
-status, body = request("GET", f"/doctors/{doctor_id}/", token=token)
-check("get doctor returns 200", status == 200 and body["name"] == "Dr. House", f"got {status}: {body}")
+# List doctors
+status, body = request("GET", "/doctors/", token=token_a)
+check("list doctors returns 200", status == 200 and len(body) >= 2, f"got {status}")
 
+# Get doctor
+status, body = request("GET", f"/doctors/{doctor_1}/", token=token_a)
+check("get doctor returns 200", status == 200, f"got {status}: {body}")
+
+# Get nonexistent doctor
+status, body = request("GET", "/doctors/99999/", token=token_a)
+check("get nonexistent doctor returns 404", status == 404, f"got {status}: {body}")
+
+# Update doctor
 status, body = request(
     "PUT",
-    f"/doctors/{doctor_id}/",
-    token=token,
-    data={"name": "Dr. House", "specialization": "Nephrology", "email": "house@example.com"},
+    f"/doctors/{doctor_1}/",
+    token=token_a,
+    data={
+        "name": "Dr. Smith",
+        "specialization": "Cardiology",
+        "email": f"smith_{SUFFIX}@example.com",
+        "years_of_experience": 15,
+    },
 )
-check("update doctor returns 200", status == 200 and body["specialization"] == "Nephrology", f"got {status}: {body}")
+check(
+    "update doctor returns 200",
+    status == 200 and body["years_of_experience"] == 15,
+    f"got {status}: {body}",
+)
+
+# Update nonexistent doctor
+status, body = request(
+    "PUT",
+    "/doctors/99999/",
+    token=token_a,
+    data={"name": "Ghost", "specialization": "None", "email": "ghost@example.com"},
+)
+check("update nonexistent doctor returns 404", status == 404, f"got {status}: {body}")
 
 print("== 4. Mappings ==")
-status, _ = request("GET", "/mappings/")
-check("mappings list requires auth (401)", status == 401, f"got {status}")
 
+# Unauthenticated
+status, body = request("GET", "/mappings/")
+check("list mappings without auth (401)", status == 401, f"got {status}")
+
+# Create mapping — user A assigns doctor to own patient
 status, body = request(
-    "POST", "/mappings/", token=token, data={"patient_id": patient_id, "doctor_id": doctor_id}
+    "POST",
+    "/mappings/",
+    token=token_a,
+    data={"patient_id": patient_a1, "doctor_id": doctor_1},
 )
 check("create mapping returns 201", status == 201, f"got {status}: {body}")
-mapping_id = body["id"] if status == 201 else None
+mapping_1 = body["id"] if status == 201 else None
 
-status, _ = request(
-    "POST", "/mappings/", token=token, data={"patient_id": patient_id, "doctor_id": doctor_id}
+# Create another mapping
+status, body = request(
+    "POST",
+    "/mappings/",
+    token=token_a,
+    data={"patient_id": patient_a1, "doctor_id": doctor_2},
 )
-check("duplicate mapping rejected (400)", status == 400, f"got {status}")
+check("create mapping 2 returns 201", status == 201, f"got {status}: {body}")
+mapping_2 = body["id"] if status == 201 else None
 
-status, _ = request("POST", "/mappings/", token=token, data={"patient_id": 9999, "doctor_id": doctor_id})
-check("mapping with missing patient rejected (400)", status == 400, f"got {status}")
+# Duplicate mapping
+status, body = request(
+    "POST",
+    "/mappings/",
+    token=token_a,
+    data={"patient_id": patient_a1, "doctor_id": doctor_1},
+)
+check("duplicate mapping rejected (400)", status == 400, f"got {status}: {body}")
 
-status, body = request("GET", "/mappings/", token=token)
-check("list mappings returns 200", status == 200 and len(body) >= 1, f"got {status}: {body}")
+# Mapping with nonexistent patient
+status, body = request(
+    "POST",
+    "/mappings/",
+    token=token_a,
+    data={"patient_id": 99999, "doctor_id": doctor_1},
+)
+check("mapping nonexistent patient rejected (400)", status == 400, f"got {status}: {body}")
 
-status, body = request("GET", f"/mappings/{patient_id}/", token=token)
-check("get doctors for patient returns 200", status == 200 and len(body) >= 1, f"got {status}: {body}")
+# Mapping with nonexistent doctor
+status, body = request(
+    "POST",
+    "/mappings/",
+    token=token_a,
+    data={"patient_id": patient_a1, "doctor_id": 99999},
+)
+check("mapping nonexistent doctor rejected (400)", status == 400, f"got {status}: {body}")
 
-status, _ = request("DELETE", f"/mappings/{mapping_id}/", token=token)
+# Cross-user mapping — B tries to assign doctor to A's patient
+status, body = request(
+    "POST",
+    "/mappings/",
+    token=token_b,
+    data={"patient_id": patient_a1, "doctor_id": doctor_1},
+)
+check("cross-user create mapping rejected (400)", status == 400, f"got {status}: {body}")
+
+# List mappings — user A sees only own
+status, body = request("GET", "/mappings/", token=token_a)
+mapping_patient_ids = [m["patient"] for m in body] if status == 200 else []
+check(
+    "user A mappings list only own patients",
+    status == 200
+    and patient_a1 in mapping_patient_ids
+    and patient_b1 not in mapping_patient_ids,
+    f"got {status}: {body}",
+)
+
+# List mappings — user B sees only own (none yet)
+status, body = request("GET", "/mappings/", token=token_b)
+check(
+    "user B mappings list empty (no own mappings)",
+    status == 200 and len(body) == 0,
+    f"got {status}: {body}",
+)
+
+# Get doctors for patient — user A
+status, body = request("GET", f"/mappings/{patient_a1}/", token=token_a)
+check(
+    "get doctors for own patient returns 200",
+    status == 200 and len(body) == 2,
+    f"got {status}: {body}",
+)
+
+# Get doctors for nonexistent patient
+status, body = request("GET", "/mappings/99999/", token=token_a)
+check("get doctors nonexistent patient returns 404", status == 404, f"got {status}: {body}")
+
+# Cross-user get doctors — B tries A's patient
+status, body = request("GET", f"/mappings/{patient_a1}/", token=token_b)
+check("cross-user get doctors returns 404", status == 404, f"got {status}: {body}")
+
+# Delete mapping — user A
+status, body = request("DELETE", f"/mappings/{mapping_1}/", token=token_a)
 check("delete mapping returns 204", status == 204, f"got {status}")
 
-status, _ = request("DELETE", f"/mappings/{mapping_id}/", token=token)
-check("deleting missing mapping returns 404", status == 404, f"got {status}")
+# Delete nonexistent mapping
+status, body = request("DELETE", "/mappings/99999/", token=token_a)
+check("delete nonexistent mapping returns 404", status == 404, f"got {status}: {body}")
+
+# Cross-user delete — B tries to delete A's mapping
+status, body = request("DELETE", f"/mappings/{mapping_2}/", token=token_b)
+check("cross-user delete mapping returns 404", status == 404, f"got {status}: {body}")
 
 print("== 5. Cleanup ==")
-status, _ = request("DELETE", f"/patients/{patient_id}/", token=token)
-check("delete patient returns 204", status == 204, f"got {status}")
 
-status, _ = request("DELETE", f"/doctors/{doctor_id}/", token=token)
-check("delete doctor returns 204", status == 204, f"got {status}")
+# User A deletes own mapping
+status, body = request("DELETE", f"/mappings/{mapping_2}/", token=token_a)
+check("delete remaining mapping returns 204", status == 204, f"got {status}")
+
+# User A deletes own patients
+status, body = request("DELETE", f"/patients/{patient_a1}/", token=token_a)
+check("delete patient A1 returns 204", status == 204, f"got {status}")
+
+status, body = request("DELETE", f"/patients/{patient_a2}/", token=token_a)
+check("delete patient A2 returns 204", status == 204, f"got {status}")
+
+# Cross-user delete — B tries to delete A's patient
+status, body = request("DELETE", f"/patients/{patient_a1}/", token=token_b)
+check("cross-user delete patient returns 404", status == 404, f"got {status}: {body}")
+
+# User B deletes own patient
+status, body = request("DELETE", f"/patients/{patient_b1}/", token=token_b)
+check("delete patient B1 returns 204", status == 204, f"got {status}")
+
+# Delete doctors
+status, body = request("DELETE", f"/doctors/{doctor_1}/", token=token_a)
+check("delete doctor 1 returns 204", status == 204, f"got {status}")
+
+status, body = request("DELETE", f"/doctors/{doctor_2}/", token=token_a)
+check("delete doctor 2 returns 204", status == 204, f"got {status}")
 
 print(f"\nResults: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

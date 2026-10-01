@@ -2,18 +2,29 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ---------------------------------------------------------------------------
+
 # Core settings (sensitive values come from environment variables / .env file)
-# ---------------------------------------------------------------------------
-SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-change-me-in-production")
-DEBUG = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
-ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()]
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+ALLOWED_HOSTS = [
+    h.strip() for h in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()
+]
+
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-dev-only-key-not-for-production"
+    else:
+        raise ImproperlyConfigured(
+            "The SECRET_KEY environment variable must be set when DEBUG is False."
+        )
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -62,10 +73,10 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "healthcare.wsgi.application"
 
-# ---------------------------------------------------------------------------
+
 # Database — PostgreSQL by default (configured via environment variables).
 # Set USE_SQLITE=1 to fall back to SQLite for quick local development.
-# ---------------------------------------------------------------------------
+
 if os.getenv("USE_SQLITE", "False").lower() in ("true", "1", "yes"):
     DATABASES = {
         "default": {
@@ -103,9 +114,9 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ---------------------------------------------------------------------------
+
 # Django REST Framework + JWT
-# ---------------------------------------------------------------------------
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",

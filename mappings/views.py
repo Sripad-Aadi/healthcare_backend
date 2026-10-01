@@ -11,7 +11,6 @@ from .serializers import MappingCreateSerializer, MappingSerializer
 
 
 class MappingListCreateView(generics.ListCreateAPIView):
-    """GET /api/mappings/ — all mappings. POST /api/mappings/ — assign a doctor to a patient."""
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -19,10 +18,14 @@ class MappingListCreateView(generics.ListCreateAPIView):
         return MappingSerializer
 
     def get_queryset(self):
-        return Mapping.objects.all().select_related("patient", "doctor")
+        return Mapping.objects.filter(
+            patient__created_by=self.request.user
+        ).select_related("patient", "doctor")
 
     def create(self, request, *args, **kwargs):
-        serializer = MappingCreateSerializer(data=request.data)
+        serializer = MappingCreateSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         mapping = serializer.save()
         return Response(
@@ -31,14 +34,9 @@ class MappingListCreateView(generics.ListCreateAPIView):
 
 
 class MappingDetailView(APIView):
-    """
-    Handles /api/mappings/<id>/ where the meaning depends on the method:
-      GET    -> <id> is a patient_id: return all doctors assigned to that patient.
-      DELETE -> <id> is a mapping id: remove that doctor-patient assignment.
-    """
 
     def get(self, request, pk):
-        if not Patient.objects.filter(id=pk).exists():
+        if not Patient.objects.filter(id=pk, created_by=request.user).exists():
             return Response(
                 {"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND
             )
@@ -46,7 +44,9 @@ class MappingDetailView(APIView):
         return Response(DoctorSerializer(doctors, many=True).data)
 
     def delete(self, request, pk):
-        mapping = Mapping.objects.filter(id=pk).first()
+        mapping = Mapping.objects.filter(
+            id=pk, patient__created_by=request.user
+        ).first()
         if not mapping:
             return Response(
                 {"error": "Mapping not found."}, status=status.HTTP_404_NOT_FOUND
